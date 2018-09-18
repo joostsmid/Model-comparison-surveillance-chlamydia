@@ -1,0 +1,18 @@
+,Min,Mode,Max
+Probability of Attending GP if Symptomatic Infection,0.9,0.905,0.91
+Probability of Testing (i.e. not GP Treating Directly) if Symptomatic Infection,0.9,0.95,1
+True Positive Probability of Test,0.89,0.94,0.99
+False Positive Probability of Test,0,0.005,0.02
+Probability of GP Reporting Test & Result to NNDSS,0.99,0.995,1
+Probability of Asymptomatic Infection in Males,0.885,0.91,0.935
+Probability of Asymptomatic Infection in Females,0.8,0.841,0.882
+Probability of Self-Curing in One Year,0.3,0.45,0.63
+Probability of Background Antibiotic Use,0.091,0.095,0.099
+Log Prior Baseline for MVN Infection Model,-3.5,,
+Log Scale for MVN Infection Model,2,,
+Correlation Length for MVN Infection Model,12,,
+Smoothness for MVN Infection Model,1.5,,
+Log Prior Baseline for MVN Screening Model,-2.75,,
+Log Scale for MVN Screening Model,2,,
+Correlation Length for MVN Screening Model,12,,
+Smoothness for MVN Screening Model,1.5,,

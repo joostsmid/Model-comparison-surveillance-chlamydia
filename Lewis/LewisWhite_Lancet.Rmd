@@ -1,0 +1,1705 @@
+---
+title: "ct_trends.ipynb"
+author: "LewisWhite"
+output: pdf_document
+---
+  
+https://github.com/joanna-lewis/ct_trends/blob/master/ct_trends.ipynb
+  
+Chlamydia in England, 2000-2015
+This notebook uses data on chlamydia testing and diagnosesto investigate trends in chlamydia prevalence in England over the period 2000-2015. Data on numbers of chlamydia tests and diagnoses by age group and sex came from from Chandra et al. Eurosurveillance 22:30453 (2017) for the years 2000-2012, and from http://www.chlamydiascreening.nhs.uk/ps/data.asp for subsequesnt years. Mid-year population estimates were from the Office for National Statistics.
+
+
+```{r include=FALSE, cache=FALSE}
+if(!require("rriskDistributions")) install.packages("rriskDistributions");library(rriskDistributions)
+if(!require("deSolve")) install.packages("deSolve");library(deSolve)
+if(!require("rootSolve")) install.packages("rootSolve");library( rootSolve)
+if(!require("ggplot2")) install.packages("ggplot2");library(ggplot2)
+if(!require("grid")) install.packages("grid");library(grid)
+
+# Multiple plot function
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+population_f = read.csv('data/population_f.csv')
+tests_f_max = read.csv('data/tests_f_max.csv')
+tests_f_min = read.csv('data/tests_f_min.csv')
+diagnoses_f_max = read.csv('data/diagnoses_f_max.csv')
+diagnoses_f_min = read.csv('data/diagnoses_f_min.csv')
+
+population_m = read.csv('data/population_m.csv')
+tests_m_max = read.csv('data/tests_m_max.csv')
+tests_m_min = read.csv('data/tests_m_min.csv')
+diagnoses_m_max = read.csv('data/diagnoses_m_max.csv')
+diagnoses_m_min = read.csv('data/diagnoses_m_min.csv')
+```
+
+
+```{r fig.width=5, fig.height=6,echo=FALSE}
+par(mfrow=c(2,2))
+plot(2000:2015, tests_m_max[,2], type="l", main="15-19y old men", xlab="", ylab="tests per 100", ylim=c(0,45))
+lines(population_m[,1], tests_m_min[,2])
+par(new = T)
+plot(2000:2015,diagnoses_m_max[,2], axes=F, xlab=NA, ylab=NA, ylim=c(0,4500), type="l", lty=3)
+lines(2000:2015, diagnoses_m_min[,2], lty=2)
+axis(side = 4)
+mtext(side = 4,  'diagnoses per 100000')
+
+plot(2000:2015, tests_f_max[,2], type="l", main="15-19y old women", xlab="", ylab="tests per 100", ylim=c(0,45))
+lines(population_f[,1], tests_f_min[,2])
+par(new = T)
+plot(2000:2015,diagnoses_f_max[,2], axes=F, xlab=NA, ylab=NA, ylim=c(0,4500), type="l", lty=3)
+lines(2000:2015, diagnoses_f_min[,2], lty=2)
+axis(side = 4)
+mtext(side = 4,  'diagnoses per 100000')
+
+plot(2000:2015, tests_m_max[,3], type="l", main="20-24y old men", xlab="", ylab="tests per 100", ylim=c(0,45))
+lines(population_m[,1], tests_m_min[,3])
+par(new = T)
+plot(2000:2015,diagnoses_m_max[,3], axes=F, xlab=NA, ylab=NA, ylim=c(0,4500), type="l", lty=3)
+lines(2000:2015, diagnoses_m_min[,3], lty=2)
+axis(side = 4)
+mtext(side = 4,  'diagnoses per 100000')
+
+plot(2000:2015, tests_f_max[,3], type="l", main="20-2y old women", xlab="", ylab="tests per 100", ylim=c(0,45))
+lines(population_f[,1], tests_f_min[,3])
+par(new = T)
+plot(2000:2015,diagnoses_f_max[,3], axes=F, xlab=NA, ylab=NA, ylim=c(0,4500), type="l", lty=3)
+lines(2000:2015, diagnoses_f_min[,3], lty=2)
+axis(side = 4)
+mtext(side = 4,  'diagnoses per 100000')
+
+```
+
+
+The first plot shows chlamydia tests and diagnoses in young people in England. Dotted lines represent annual tests per 100 individuals; solid lines represent annual diagnoses per 1000 individuals. Data are shown by age and sex: in men (panels A and B) and women (C and D), and in 15-19-year-olds (A and C) and 20-24-year-olds (B and D). Dashed lines represent the start and end of the NCSP roll-out across England.
+
+# Chlamydia prevalence
+We now estimate chlamydia prevalence and year-on-year changes thereof, using the method described in Lewis and White Epidemiology 28:492-502 (2017) and at https://github.com/joanna-lewis/ct_surveillance.
+
+
+```{r include=FALSE, cache=FALSE}
+n_sample = 1000
+
+# proportion sexually active men
+p_active_m = array(NA, dim=c(1,2,n_sample))
+
+# Beta parameters from analysis in R
+p_active_m[1,1,] = rbeta(n_sample, 313.4784, 146.67142) # 16-19
+p_active_m[1,2,] = rbeta(n_sample, 694.6619, 37.21263) # 20-24
+
+# population sexually active in separate (16) years
+
+pop_active_m = array(NA, dim=c(16,2,n_sample))
+
+for (i in 1:16){
+  for (j in 1:2){
+    pop_active_m[i,j,] <- rbinom(n_sample, population_m[i,j+1], p_active_m[1,j,])
+  }
+}
+
+# proportion sexually active women
+p_active_f = array(NA, dim=c(1,2,n_sample))
+
+# Beta parameters from analysis in R
+p_active_f[1,1,] = rbeta(n_sample, 313.4784, 146.67142) # 16-19
+p_active_f[1,2,] = rbeta(n_sample, 694.6619, 37.21263) # 20-24
+
+# population sexually active in separate (16) years
+
+pop_active_f = array(NA, dim=c(16,2,n_sample))
+
+for (i in 1:16){
+  for (j in 1:2){
+    pop_active_f[i,j,] <- rbinom(n_sample, population_f[i,j+1], p_active_f[1,j,])
+  }
+}
+```
+
+We sample from distributions for the probability of being sexually active, the size of the sexually active population and the testing and diagnosis rates per person per year.
+
+```{r include=FALSE, cache=FALSE}
+
+
+# testing and diagnosis rates, per person per year
+test_rate_f_max = array(NA, dim=c(16,2,n_sample))
+diag_rate_f_max = array(NA, dim=c(16,2,n_sample))
+test_rate_f_min = array(NA, dim=c(16,2,n_sample))
+diag_rate_f_min = array(NA, dim=c(16,2,n_sample))
+test_rate_m_max = array(NA, dim=c(16,2,n_sample))
+diag_rate_m_max = array(NA, dim=c(16,2,n_sample))
+test_rate_m_min = array(NA, dim=c(16,2,n_sample))
+diag_rate_m_min = array(NA, dim=c(16,2,n_sample))
+
+for (i in 1:16){
+  for (j in 1:2){
+    test_rate_m_max[i,j,] = rgamma(n_sample, tests_m_max[i,j+1]*population_m[i,j+1]/100, 1)/pop_active_m[i,j,]
+    diag_rate_m_max[i,j,] = rgamma(n_sample, diagnoses_m_max[i,j+1]*population_m[i,j+1]/100000, 1)/pop_active_m[i,j,]
+    test_rate_m_min[i,j,] = rgamma(n_sample, tests_m_min[i,j+1]*population_m[i,j+1]/100, 1)/pop_active_m[i,j,]
+    diag_rate_m_min[i,j,] = rgamma(n_sample, diagnoses_m_min[i,j+1]*population_m[i,j+1]/100000, 1)/pop_active_m[i,j,]
+    
+    test_rate_f_max[i,j,] = rgamma(n_sample, tests_f_max[i,j+1]*population_f[i,j+1]/100, 1)/pop_active_f[i,j,]
+    diag_rate_f_max[i,j,] = rgamma(n_sample, diagnoses_f_max[i,j+1]*population_f[i,j+1]/100000, 1)/pop_active_f[i,j,]
+    test_rate_f_min[i,j,] = rgamma(n_sample, tests_f_min[i,j+1]*population_f[i,j+1]/100, 1)/pop_active_f[i,j,]
+    diag_rate_f_min[i,j,] = rgamma(n_sample, diagnoses_f_min[i,j+1]*population_f[i,j+1]/100000, 1)/pop_active_f[i,j,]
+  }
+}
+       
+```
+
+```{r include=FALSE, cache=FALSE}
+# This script contains the functions linking observed tests, symptomatic/asymptomatic/toal diagnoses, 
+# incidence, prevalence, screening and other model parameters
+# Running it takes a little while because of all the symbolic algebra
+# https://github.com/joanna-lewis/ct_trends/blob/master/test_diag_fun.py
+
+##############################
+# function to calculate steady-state A, U and S
+##############################
+
+sol_dyn <- list(
+  S_fun = function(alpha_UA, alpha_AU, alpha_US, alpha_SU) {
+    S <- alpha_AU*alpha_US/(alpha_AU*alpha_US + alpha_SU*(alpha_AU + alpha_UA))
+    return(S)
+  },
+  
+  U_fun = function(alpha_UA, alpha_AU, alpha_US, alpha_SU) {
+    U <- alpha_AU*alpha_SU/(alpha_AU*alpha_US + alpha_SU*(alpha_AU + alpha_UA))
+    return(U)
+  },
+  
+  A_fun = function(alpha_UA, alpha_AU, alpha_US, alpha_SU) {
+    A <- alpha_SU*alpha_UA/(alpha_AU*alpha_US + alpha_SU*(alpha_AU + alpha_UA))
+    return(A)
+  },
+  
+  prev_fun = function(alpha_UA, alpha_AU, alpha_US, alpha_SU) { #dyn_fun in python code
+    prev <- alpha_AU*alpha_US/(alpha_AU*alpha_US + alpha_SU*(alpha_AU + alpha_UA)) +
+      alpha_SU*alpha_UA/(alpha_AU*alpha_US + alpha_SU*(alpha_AU + alpha_UA))
+    return(prev)
+  }
+)
+
+##############################
+# now the model for observed testing and diagnosis rates
+##############################
+
+model_test_diag <- list(
+  # returns list with two functions
+  
+  test_fun = function(A, U, ssym, test_sym, true_pos, false_pos){
+    # function that returns number of tests, given number of asymptomatic cases and uninfecteds
+    tsym <- ( ssym + (1 - A - U)*test_sym ) # number of tests
+    return(tsym)
+  },
+  
+  diag_fun = function(A, U, ssym, test_sym, true_pos, false_pos){
+    # function that returns number of diagnoses, given number of asymptomatic cases and uninfecteds
+    dsym <- ( A*ssym*true_pos + U*ssym*false_pos + (1 - A - U)*test_sym*true_pos ) # number of diagnoses
+    return(dsym)
+  }
+)
+
+test_diag_fun <- function(parms, p_symp, self_cure, test_sym, true_pos, false_pos, cov=NULL, adpc=NULL){
+  # function that returns number of tests and number of diagnoses, given a certain incidence and screening rate (parms),
+  # or difference with measured number of tests (cov) and diagnoses (adpc) if cov and adpc not NULL
+  inc <- parms[1] # incidence
+  scr <- parms[2] # screening rate
+  # p_symp = parms[3] # proportion symptomatic
+  # self_cure = parms[4] # self-cure rate
+  # test_sym = parms[5] # testing rate in symptomatics
+  # true_pos = parms[6] # true positive rate
+  # false_pos = parms[7] # false positive rate
+  
+  if (is.null(cov)) cov <- 0
+  if (is.null(adpc)) adpc <- 0
+  A = sol_dyn$A_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, scr*true_pos + test_sym*true_pos)
+  U = sol_dyn$U_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, scr*true_pos + test_sym*true_pos)
+  test <- model_test_diag$test_fun(A, U, scr, test_sym, true_pos, false_pos) - cov
+  diag <- model_test_diag$diag_fun(A, U, scr, test_sym, true_pos, false_pos) - adpc
+  return(c(test=test, diag=diag))
+}
+
+##############################
+# ...and if symptomatic and asymptomatic diagnoses are observed separately:
+##############################
+
+model_test_diag_sa <- list(
+  # returns list with two functions
+  
+  test_sa_fun = function(A, U, ssym, test_sym, true_pos, false_pos){
+    # function that returns number of tests, given number of asymptomatic cases and uninfecteds
+    tsym <- ( (A+U)*ssym + (1 - A - U)*test_sym ) # number of tests
+    return(tsym)
+  },
+  
+  diags_fun = function(A, U, ssym, test_sym, true_pos, false_pos){
+    # function that returns number of symptomatic diagnoses
+    dssym <- (1 - A - U)*test_sym*true_pos # number of diagnoses
+    return(dsym)
+  },
+  
+  diaga_fun = function(A, U, ssym, test_sym, true_pos, false_pos){
+    # function that returns number of asymptomatic diagnoses
+    dasym <- ( A*ssym*true_pos + U*ssym*false_pos )
+    return(dsym)
+  }
+)
+
+test_diag_sym_asym_fun <- function(parms, p_symp, self_cure, test_sym, true_pos, false_pos){
+  # function that returns number of tests and number of diagnoses, given a certain incidence and screening rate (parms),
+  # or difference with measured number of tests (cov) and diagnoses (adpc) if cov and adpc not NULL
+  inc <- parms[1] # incidence
+  scr <- parms[2] # screening rate
+  
+  A = sol_dyn$A_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, self_cure + scr*true_pos + test_sym*true_pos)
+  U = sol_dyn$U_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, self_cure + scr*true_pos + test_sym*true_pos)
+  test_sa <- model_test_diag_sa$test_sa_fun(A, U, scr, test_sym, true_pos, false_pos)
+  diags <- model_test_diag_sa$diags_fun(A, U, scr, test_sym, true_pos, false_pos)
+  diaga <- model_test_diag_sa$diaga_fun(A, U, scr, test_sym, true_pos, false_pos)
+  return(c(test_sa=test_sa, diags=diags, diaga=diaga))
+}
+
+##############################
+# use information on symptoms in _prevalent_ (as opposed to incident) infections
+##############################
+
+test_diag_prev_symp_fun <- function(parms, p_symp, self_cure, test_sym, true_pos, false_pos){
+  inc <- parms[1] # incidence
+  scr <- parms[2] # screening rate
+  
+  A = sol_dyn$A_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, self_cure + scr*true_pos + test_sym*true_pos)
+  U = sol_dyn$U_fun(inc*(1-p_symp), self_cure + scr*true_pos, inc*p_symp, self_cure + scr*true_pos + test_sym*true_pos)
+  
+  test <- model_test_diag$test_fun(A, U, scr, test_sym, true_pos, false_pos)
+  diag <- model_test_diag$diag_fun(A, U, scr, test_sym, true_pos, false_pos)
+  return(c(test=test, diag=diag, propsym=(1 - A - U)/(1 - U)))
+}
+```
+
+```{r include=FALSE, cache=FALSE}
+# This script provides a function for calculating the likelihood of categorical data.
+# https://github.com/joanna-lewis/ct_trends/blob/master/multinomial_pmf.py
+
+# This script samples model parameters from prior distributions, following the method in england.ipynb.
+# https://github.com/joanna-lewis/ct_trends/blob/sample_parameters.py
+
+######################
+# parameters of beta distributions representing the proportion of the population sexually 
+# active, by sex and age group
+######################
+
+# men, 16-24
+alpha_m_16_24 <- get.beta.par(p = c(0.025, 0.975), q = c(0.8023836019, 0.843403825))[1]
+beta_m_16_24 <- get.beta.par(p = c(0.025, 0.975), q = c(0.8023836019, 0.843403825))[2]
+
+# women, 16-24
+alpha_f_16_24 <- get.beta.par(p = c(0.025, 0.975), q = c(0.7998634469, 0.837979601))[1]
+beta_f_16_24 <- get.beta.par(p = c(0.025, 0.975), q = c(0.7998634469, 0.837979601))[2]
+
+######################
+# sexually-active population:
+######################
+
+# Population, testing and diagnosis data is from http://www.chlamydiascreening.nhs.uk/ps/data.asp (downloaded 17 April 2015).
+p_active_m_16_24 = rbeta(n_sample, alpha_m_16_24, beta_m_16_24) # 16-24 yo only
+pop_active_m_15_24 = rbinom(n_sample, 3519015, p_active_m_16_24)
+
+p_active_f_16_24 = rbeta(n_sample, alpha_f_16_24, beta_f_16_24) # 16-24 yo only
+pop_active_f_15_24 = rbinom(n_sample, 3388842, p_active_f_16_24)
+
+######################
+# testing and diagnosis rates, per person per year (Surveillance data on chlamydia testing and diagnosis rates in England in 2012)
+# Population, testing and diagnosis data is from http://www.chlamydiascreening.nhs.uk/ps/data.asp (downloaded 17 April 2015).
+######################
+
+test_rate_m_15_24 = rgamma(n_sample,566908, 1)/pop_active_m_15_24
+diag_rate_m_15_24 = rgamma(n_sample,48387, 1)/pop_active_m_15_24
+
+test_rate_f_15_24 = rgamma(n_sample,1205896, 1)/pop_active_f_15_24
+diag_rate_f_15_24 = rgamma(n_sample,88101, 1)/pop_active_f_15_24
+
+######################
+# test performance
+######################
+
+p_true_pos_m = rbeta(n_sample,32+1, 0+1) # Low Health Technol Assess (2007):
+p_false_pos_m = rbeta(n_sample,2+1, 950+1) # Low Health Technol Assess (2007)
+
+p_true_pos_f = rbeta(n_sample,129+1, 12+1) # Low Health Technol Assess (2007): 129 of 141 infected samples tested +ve
+p_false_pos_f = rbeta(n_sample,4+1, 2323+1) # Low Health Technol Assess (2007): 4 of 2327 uninfected samples tested +ve
+
+###################################
+# Rate of treatment seeking by symptomatic cases
+###################################
+
+# 1.2.2 Rate of treatment seeking by symptomatic cases
+# (Mercer et al., Sex. Transm. Infect. 83:400-405; 2007).
+# Proportion
+# Estimate 95% Confidence Interval
+# < 1 week 26.7% (14.4, 44.2)%
+#   7-13 days 14.4% (6.1, 30.2)%
+#   14-27 days 20.8% (13.3, 31.0)%
+#   4-6 weeks 16.6% (8.5, 29.9)%
+#   > 6 weeks 21.5% (5.5, 56.4)%
+
+
+# Find beta distributions corresponding to 95% CIs reported in
+# Mercer Sex. Transm. Infect. (2007) (see table above).
+a = rep(NA, 5)
+b = rep(NA, 5)
+
+# < 1 week
+a[1] <- get.beta.par(p = c(0.025, 0.975), q = c(0.144, 0.442))[1]
+b[1] <- get.beta.par(p = c(0.025, 0.975), q = c(0.144, 0.442))[2]
+
+# 7-13 days
+a[2] <- get.beta.par(p = c(0.025, 0.975), q = c(0.061, 0.302))[1]
+b[2] <- get.beta.par(p = c(0.025, 0.975), q = c(0.061, 0.302))[2]
+
+# 14-27 days
+a[3] <- get.beta.par(p = c(0.025, 0.975), q = c(0.133, 0.310))[1]
+b[3] <- get.beta.par(p = c(0.025, 0.975), q = c(0.133, 0.310))[2]
+
+# 28-41 days
+a[4] <- get.beta.par(p = c(0.025, 0.975), q = c(0.085, 0.299))[1]
+b[4] <- get.beta.par(p = c(0.025, 0.975), q = c(0.085, 0.299))[2]
+
+# 42 days and over
+a[5] <- get.beta.par(p = c(0.025, 0.975), q = c(0.055, 0.564))[1]
+b[5] <- get.beta.par(p = c(0.025, 0.975), q = c(0.055, 0.564))[2]
+
+# Metropolis-Hastings to get a sample for rate of treatment
+i = 1
+
+att_symp = rep(NA, n_sample+1000) # testing rate per person per year. Allow 1000 extra samples for burn-in
+ll = c(NA,n_sample+1000,5) # log-likelihood
+#props = array(NA,dim=c(n_sample+1000,5))
+old = 0.04 # starting sample value
+new = 0.04 # starting sample value
+# simulate probabilities corresponding to data
+# proportion expected in each time window
+tps = c(0., 7., 14., 28., 42., Inf)
+simp_old = exp(-old*tps[1:5]) - exp(-old*tps[2:length(tps)])
+simp_new = exp(-new*tps[1:5]) - exp(-new*tps[2:length(tps)])
+acc=0.
+while(i <= n_sample+1000){# to do samples for p_test_symp
+  new = rnorm(1, old, 0.05) # generate a sample from normal distribution
+  if (new < 0){
+    att_symp[i] = old # reject
+    ll[i] = -1e10
+  }
+  else {
+    simp_old = exp(-old*tps[1:5]) - exp(-old*tps[2:length(tps)])
+    simp_new = exp(-new*tps[1:5]) - exp(-new*tps[2:length(tps)])
+    if (sum(simp_new > 0) != length(tps) - 1){
+      att_symp[i] = old # reject
+      ll[i] = -1e10
+    }
+    else{
+      # simulate probabilities corresponding to the data
+      log_ratio = sum(dbeta((simp_new-0)/1, a, b, log=T) / 1) - sum(dbeta((simp_old-0)/1, a, b, log=T)/1)
+      
+      if (log(runif(1,0,1)) < log_ratio){
+        att_symp[i] = new # accept
+        ll[i] = sum(dbeta(simp_new, a, b, log=T))
+        old = new
+        acc = acc+1
+      }
+      else{
+        att_symp[i] = old # reject
+        ll[i] = sum(dbeta(simp_old, a, b))
+      }
+    }
+  }
+  #props[i] = simp_old
+  i = i+1
+}
+
+att_symp = att_symp[1000:length(att_symp)] # remove burn-in samples
+ll = ll[1000:length(ll)] # log-likelihood
+# acc/(n_sample+1000) # print the proportion of samples accepted
+# mean(att_symp)*365.25
+# quantile(att_symp, c(.025, .975)) *365.25
+att_symp = att_symp*365.25 # convert rate from day^-1 to year^-1
+
+###################################
+# Spontaneous clearance
+###################################
+
+sc_m  = read.csv('data/chlamydia_two_exponentials_men.csv')[1:n_sample,1]
+sc_f  = read.csv('data/chlamydia_two_exponentials_women.csv')[1:n_sample,1]
+
+#########################################################################################################
+# Infer the proportion of incident infections which are asymptomatic, by calibrating to the Natsal-3 prevalence estimates.
+#########################################################################################################
+
+alpha_prev_m <- get.beta.par(p = c(0.025, 0.975), q = c(0.015, 0.034))[1]
+beta_prev_m <- get.beta.par(p = c(0.025, 0.975), q = c(0.015, 0.034))[2]
+prev_m = rbeta(n_sample, alpha_prev_m, beta_prev_m)
+
+alpha_prev_f <- get.beta.par(p = c(0.025, 0.975), q = c(0.022, 0.043))[1]
+beta_prev_f <- get.beta.par(p = c(0.025, 0.975), q = c(0.022, 0.043))[2]
+prev_f = rbeta(n_sample, alpha_prev_f, beta_prev_f)
+
+# This script also contains the functions linking observed tests, symptomatic/asymptomatic/toal diagnoses,
+# incidence, prevalence, screening and other model parameters
+# Running it takes a little while because of all the symbolic algebra
+
+# incidence, screening and proportion of incident infections asymptomatic in men
+tmpfun <- function(parms, sc, p_true_pos, p_false_pos, att_symp, mytest_rate=NULL, mydiag_rate=NULL, myprev=NULL){
+  # function that returns number of tests& diagnoses and prevalence, given a certain incidence and screening rate,
+  # or difference with measured number of tests (mytest_rate) and diagnoses (mydiag_rate) if mytest_rate and mydiag_rate not NULL
+  inc <- parms[1]
+  scr <- parms[2]
+  p_asymp <- parms[3]
+  
+  if (is.null(mytest_rate)) mytest_rate <- 0
+  if (is.null(mydiag_rate)) mydiag_rate <- 0
+  if (is.null(myprev)) myprev <- 0
+  
+  A <- sol_dyn$A_fun(inc*p_asymp, sc + scr*p_true_pos, inc*(1 - p_asymp), scr*p_true_pos + att_symp*p_true_pos)
+  U <- sol_dyn$U_fun(inc*p_asymp, sc + scr*p_true_pos, inc*(1 - p_asymp), scr*p_true_pos + att_symp*p_true_pos)
+  test <- model_test_diag$test_fun(A, U, scr, att_symp, p_true_pos, p_false_pos) - mytest_rate
+  diag <- model_test_diag$diag_fun(A, U, scr, att_symp, p_true_pos, p_false_pos) - mydiag_rate
+  
+  prev <- sol_dyn$prev_fun(inc*p_asymp,sc + scr*p_true_pos,inc*(1-p_asymp),scr*p_true_pos + att_symp*p_true_pos) - myprev
+  
+  return(c(test=test, diag=diag, prev=prev))
+}
+
+inc_m = rep(0, n_sample)
+scr_m = rep(0, n_sample)
+p_asymp_m = rep(0, n_sample)
+
+inc_f = rep(0, n_sample)
+scr_f = rep(0, n_sample)
+p_asymp_f = rep(0, n_sample)
+
+for (i in 1:n_sample){
+
+  # calculate incidence and screening rate such that data on number of tests, diagnoses and prevalence
+  # complies with calculated number of tests, diagnoses and prevalence
+  solution_m <- multiroot(function(parms) tmpfun(parms, sc_m[i], p_true_pos_m[i], p_false_pos_m[i], att_symp[i], 
+                                                 test_rate_m_15_24[i], diag_rate_m_15_24[i], prev_m[i]), 
+                          start = c(0.09, 0.25, 0.6))$root
+  inc_m[i] <- solution_m[1]
+  scr_m[i] <- solution_m[2]
+  p_asymp_m[i] <- solution_m[3]
+  
+}
+
+for (i in 1:n_sample){
+    
+  solution_f <- multiroot(function(parms) tmpfun(parms, sc_f[i], p_true_pos_f[i], p_false_pos_f[i], att_symp[i], 
+                                                 test_rate_f_15_24[i], diag_rate_f_15_24[i], prev_f[i]), 
+                          start = c(0.09, 0.25, 0.9))$root
+  inc_f[i] <- solution_f[1]
+  scr_f[i] <- solution_f[2]
+  p_asymp_f[i] <- solution_f[3]
+  
+}
+# par(mfrow=c(1,1))
+# hist(p_asymp_f, xlab = "proportion asymptomatic incident infections", main="", col=rgb(0,0,1,0.5))
+```
+
+```{r include=FALSE, cache=FALSE}
+# The sampled parameter values are now used to infer prevalence in men and women in different age groups, each year.
+# max and min refer to the numbers of tests and diagnoses
+
+prev_m_max = array(NA, dim=c(16,2,n_sample))
+inc_m_max = array(NA, dim=c(16,2,n_sample))
+scr_m_max = array(NA, dim=c(16,2,n_sample))
+
+prev_f_max = array(NA, dim=c(16,2,n_sample))
+inc_f_max = array(NA, dim=c(16,2,n_sample))
+scr_f_max = array(NA, dim=c(16,2,n_sample))
+
+prev_m_min = array(NA, dim=c(16,2,n_sample))
+inc_m_min = array(NA, dim=c(16,2,n_sample))
+scr_m_min = array(NA, dim=c(16,2,n_sample))
+
+prev_f_min = array(NA, dim=c(16,2,n_sample))
+inc_f_min = array(NA, dim=c(16,2,n_sample))
+scr_f_min = array(NA, dim=c(16,2,n_sample))
+
+
+for (i in 1:16){
+  for (j in 1:2){
+    for (k in 1:n_sample){
+      
+      # get incidence and screening rate given data on testing and diagnoses
+      ss_m_max <- multiroot(function(parms) test_diag_fun(parms,1-p_asymp_m[k], sc_m[k], att_symp[k], p_true_pos_m[k], p_false_pos_m[k])-c(test_rate_m_max[i,j,k], diag_rate_m_max[i,j,k]),start = c(0.03, 0.44))$root
+      inc_m_max[i,j,k] <- ss_m_max[1]
+      scr_m_max[i,j,k] <- ss_m_max[2]
+  
+      # calculate prevalence given the computed incidence and screening rates
+      prev_m_max[i,j,k] <- sol_dyn$prev_fun(inc_m_max[i,j,k]*p_asymp_m[k],
+                                      sc_m[k] + scr_m_max[i,j,k]*p_true_pos_m[k],
+                                      inc_m_max[i,j,k]*(1-p_asymp_m[k]),
+                                      scr_m_max[i,j,k]*p_true_pos_m[k] + att_symp[k]*p_true_pos_m[k])
+      
+      # get incidence and screening rate given data on testing and diagnoses
+      ss_f_max <- multiroot(function(parms) test_diag_fun(parms,1-p_asymp_f[k], sc_f[k], att_symp[k], p_true_pos_f[k], p_false_pos_f[k])-c(test_rate_f_max[i,j,k], diag_rate_f_max[i,j,k]),start = c(0.03, 0.44))$root
+      inc_f_max[i,j,k] <- ss_f_max[1]
+      scr_f_max[i,j,k] <- ss_f_max[2]
+  
+      # calculate prevalence given the computed incidence and screening rates
+      prev_f_max[i,j,k] <- sol_dyn$prev_fun(inc_f_max[i,j,k]*p_asymp_f[k],
+                                      sc_f[k] + scr_f_max[i,j,k]*p_true_pos_f[k],
+                                      inc_f_max[i,j,k]*(1-p_asymp_f[k]),
+                                      scr_f_max[i,j,k]*p_true_pos_f[k] + att_symp[k]*p_true_pos_f[k])
+      
+      # get incidence and screening rate given data on testing and diagnoses
+      ss_m_min <- multiroot(function(parms) test_diag_fun(parms,1-p_asymp_m[k], sc_m[k], att_symp[k], p_true_pos_m[k], p_false_pos_m[k])-c(test_rate_m_min[i,j,k], diag_rate_m_min[i,j,k]),start = c(0.03, 0.44))$root
+      inc_m_min[i,j,k] <- ss_m_min[1]
+      scr_m_min[i,j,k] <- ss_m_min[2]
+  
+      # calculate prevalence given the computed incidence and screening rates
+      prev_m_min[i,j,k] <- sol_dyn$prev_fun(inc_m_min[i,j,k]*p_asymp_m[k],
+                                      sc_m[k] + scr_m_min[i,j,k]*p_true_pos_m[k],
+                                      inc_m_min[i,j,k]*(1-p_asymp_m[k]),
+                                      scr_m_min[i,j,k]*p_true_pos_m[k] + att_symp[k]*p_true_pos_m[k])
+      
+      # get incidence and screening rate given data on testing and diagnoses
+      ss_f_min <- multiroot(function(parms) test_diag_fun(parms,1-p_asymp_f[k], sc_f[k], att_symp[k], p_true_pos_f[k], p_false_pos_f[k])-c(test_rate_f_min[i,j,k], diag_rate_f_min[i,j,k]),start = c(0.03, 0.44))$root
+      inc_f_min[i,j,k] <- ss_f_min[1]
+      scr_f_min[i,j,k] <- ss_f_min[2]
+  
+      # calculate prevalence given the computed incidence and screening rates
+      prev_f_min[i,j,k] <- sol_dyn$prev_fun(inc_f_min[i,j,k]*p_asymp_f[k],
+                                      sc_f[k] + scr_f_min[i,j,k]*p_true_pos_f[k],
+                                      inc_f_min[i,j,k]*(1-p_asymp_f[k]),
+                                      scr_f_min[i,j,k]*p_true_pos_f[k] + att_symp[k]*p_true_pos_f[k])
+    }
+  }
+}
+
+
+prevdiff_m_max = array(NA, dim=c(15,2,n_sample))            
+prevdiff_f_max = array(NA, dim=c(15,2,n_sample))  
+prevdiff_m_min = array(NA, dim=c(15,2,n_sample))            
+prevdiff_f_min = array(NA, dim=c(15,2,n_sample))  
+for (i in 1:15){
+  for (j in 1:2){
+    for (k in 1:n_sample){
+      prevdiff_m_max[i,j,k] <- 100*(prev_m_max[i+1,j,k]-prev_m_max[i,j,k])
+      prevdiff_f_max[i,j,k] <- 100*(prev_f_max[i+1,j,k]-prev_f_max[i,j,k])
+      prevdiff_m_min[i,j,k] <- 100*(prev_m_min[i+1,j,k]-prev_m_min[i,j,k])
+      prevdiff_f_min[i,j,k] <- 100*(prev_f_min[i+1,j,k]-prev_f_min[i,j,k])
+    }
+  }
+}
+```
+
+```{r fig.width=5, fig.height=6,echo=FALSE}
+prev_m_max_sorted <- aperm (apply (prev_m_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prev_m_max <- data.frame(years=2000:2015, 
+                 prev_m_1519_max_median = prev_m_max_sorted[,1,round(n_sample*.5)],
+                 prev_m_2024_max_median = prev_m_max_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_m_1519_max_low = prev_m_max_sorted[,1,round(n_sample*.025)],
+                 prev_m_2024_max_low = prev_m_max_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_m_1519_max_upp = prev_m_max_sorted[,1,round(n_sample*.975)],
+                 prev_m_2024_max_upp = prev_m_max_sorted[,2,round(n_sample*.975)])
+
+prev_f_max_sorted <- aperm (apply (prev_f_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prev_f_max <- data.frame(years=2000:2015, 
+                 prev_f_1519_max_median = prev_f_max_sorted[,1,round(n_sample*.5)],
+                 prev_f_2024_max_median = prev_f_max_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_f_1519_max_low = prev_f_max_sorted[,1,round(n_sample*.025)],
+                 prev_f_2024_max_low = prev_f_max_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_f_1519_max_upp = prev_f_max_sorted[,1,round(n_sample*.975)],
+                 prev_f_2024_max_upp = prev_f_max_sorted[,2,round(n_sample*.975)])
+
+prev_m_min_sorted <- aperm (apply (prev_m_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prev_m_min <- data.frame(years=2000:2015, 
+                 prev_m_1519_min_median = prev_m_min_sorted[,1,round(n_sample*.5)],
+                 prev_m_2024_min_median = prev_m_min_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_m_1519_min_low = prev_m_min_sorted[,1,round(n_sample*.025)],
+                 prev_m_2024_min_low = prev_m_min_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_m_1519_min_upp = prev_m_min_sorted[,1,round(n_sample*.975)],
+                 prev_m_2024_min_upp = prev_m_min_sorted[,2,round(n_sample*.975)])
+
+prev_f_min_sorted <- aperm (apply (prev_f_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prev_f_min <- data.frame(years=2000:2015, 
+                 prev_f_1519_min_median = prev_f_min_sorted[,1,round(n_sample*.5)],
+                 prev_f_2024_min_median = prev_f_min_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_f_1519_min_low = prev_f_min_sorted[,1,round(n_sample*.025)],
+                 prev_f_2024_min_low = prev_f_min_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_f_1519_min_upp = prev_f_min_sorted[,1,round(n_sample*.975)],
+                 prev_f_2024_min_upp = prev_f_min_sorted[,2,round(n_sample*.975)])
+
+
+prev_m_1519_plot <- ggplot() +
+  geom_line(data = df_prev_m_max , aes(x=years, y=prev_m_1519_max_median), col="red") +
+  geom_ribbon(data=df_prev_m_max , aes(x=years, ymin=prev_m_1519_max_low, ymax=prev_m_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prev_m_min , aes(x=years, y=prev_m_1519_min_median), col="orange") +
+  geom_ribbon(data=df_prev_m_min , aes(x=years, ymin=prev_m_1519_min_low, ymax=prev_m_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Prevalence") +
+  ggtitle("men 15-19") +
+  coord_cartesian(ylim=c(0,0.08)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prev_m_2024_plot <- ggplot() +
+  geom_line(data = df_prev_m_max , aes(x=years, y=prev_m_2024_max_median), col="red") +
+  geom_ribbon(data=df_prev_m_max , aes(x=years, ymin=prev_m_2024_max_low, ymax=prev_m_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prev_m_min , aes(x=years, y=prev_m_2024_min_median), col="orange") +
+  geom_ribbon(data=df_prev_m_min , aes(x=years, ymin=prev_m_2024_min_low, ymax=prev_m_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Prevalence") +
+    ggtitle("men 20-24") +
+  coord_cartesian(ylim=c(0,0.08)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prev_f_1519_plot <- ggplot() +
+  geom_line(data = df_prev_f_max , aes(x=years, y=prev_f_1519_max_median), col="red") +
+  geom_ribbon(data=df_prev_f_max , aes(x=years, ymin=prev_f_1519_max_low, ymax=prev_f_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prev_f_min , aes(x=years, y=prev_f_1519_min_median), col="orange") +
+  geom_ribbon(data=df_prev_f_min , aes(x=years, ymin=prev_f_1519_min_low, ymax=prev_f_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Prevalence") +
+  ggtitle("women 15-19") +
+  coord_cartesian(ylim=c(0,0.08)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prev_f_2024_plot <- ggplot() +
+  geom_line(data = df_prev_f_max , aes(x=years, y=prev_f_2024_max_median), col="red") +
+  geom_ribbon(data=df_prev_f_max , aes(x=years, ymin=prev_f_2024_max_low, ymax=prev_f_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prev_f_min , aes(x=years, y=prev_f_2024_min_median), col="orange") +
+  geom_ribbon(data=df_prev_f_min , aes(x=years, ymin=prev_f_2024_min_low, ymax=prev_f_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Prevalence") +
+  ggtitle("women 20-24") +
+  coord_cartesian(ylim=c(0,0.08)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+multiplot(plotlist=list(prev_m_1519_plot, prev_f_1519_plot, prev_m_2024_plot, prev_f_2024_plot), layout=matrix(1:4, nrow=2, byrow=TRUE))
+
+```
+
+Now we plot the difference in prevalence
+
+```{r fig.width=5, fig.height=6,echo=FALSE}
+prevdiff_m_max_sorted <- aperm (apply (prevdiff_m_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prevdiff_m_max <- data.frame(years=2001:2015, 
+                 prev_m_1519_max_median = prevdiff_m_max_sorted[,1,round(n_sample*.5)],
+                 prev_m_2024_max_median = prevdiff_m_max_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_m_1519_max_low = prevdiff_m_max_sorted[,1,round(n_sample*.025)],
+                 prev_m_2024_max_low = prevdiff_m_max_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_m_1519_max_upp = prevdiff_m_max_sorted[,1,round(n_sample*.975)],
+                 prev_m_2024_max_upp = prevdiff_m_max_sorted[,2,round(n_sample*.975)])
+
+prevdiff_f_max_sorted <- aperm (apply (prevdiff_f_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prevdiff_f_max <- data.frame(years=2001:2015, 
+                 prev_f_1519_max_median = prevdiff_f_max_sorted[,1,round(n_sample*.5)],
+                 prev_f_2024_max_median = prevdiff_f_max_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_f_1519_max_low = prevdiff_f_max_sorted[,1,round(n_sample*.025)],
+                 prev_f_2024_max_low = prevdiff_f_max_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_f_1519_max_upp = prevdiff_f_max_sorted[,1,round(n_sample*.975)],
+                 prev_f_2024_max_upp = prevdiff_f_max_sorted[,2,round(n_sample*.975)])
+
+prevdiff_m_min_sorted <- aperm (apply (prevdiff_m_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prevdiff_m_min <- data.frame(years=2001:2015, 
+                 prev_m_1519_min_median = prevdiff_m_min_sorted[,1,round(n_sample*.5)],
+                 prev_m_2024_min_median = prevdiff_m_min_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_m_1519_min_low = prevdiff_m_min_sorted[,1,round(n_sample*.025)],
+                 prev_m_2024_min_low = prevdiff_m_min_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_m_1519_min_upp = prevdiff_m_min_sorted[,1,round(n_sample*.975)],
+                 prev_m_2024_min_upp = prevdiff_m_min_sorted[,2,round(n_sample*.975)])
+
+prevdiff_f_min_sorted <- aperm (apply (prevdiff_f_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+# calculate year-on-year changes
+df_prevdiff_f_min <- data.frame(years=2001:2015, 
+                 prev_f_1519_min_median = prevdiff_f_min_sorted[,1,round(n_sample*.5)],
+                 prev_f_2024_min_median = prevdiff_f_min_sorted[,2,round(n_sample*.5)],
+                 
+                 prev_f_1519_min_low = prevdiff_f_min_sorted[,1,round(n_sample*.025)],
+                 prev_f_2024_min_low = prevdiff_f_min_sorted[,2,round(n_sample*.025)],
+                 
+                 prev_f_1519_min_upp = prevdiff_f_min_sorted[,1,round(n_sample*.975)],
+                 prev_f_2024_min_upp = prevdiff_f_min_sorted[,2,round(n_sample*.975)])
+
+
+prevdiff_m_1519_plot <- ggplot() +
+  geom_line(data = df_prevdiff_m_max , aes(x=years, y=prev_m_1519_max_median), col="red") +
+  geom_ribbon(data=df_prevdiff_m_max , aes(x=years, ymin=prev_m_1519_max_low, ymax=prev_m_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prevdiff_m_min , aes(x=years, y=prev_m_1519_min_median), col="orange") +
+  geom_ribbon(data=df_prevdiff_m_min , aes(x=years, ymin=prev_m_1519_min_low, ymax=prev_m_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Change in % prevalence") +
+  ggtitle("Change % prevalence men 15-19y") +
+  coord_cartesian(ylim=c(-1,1)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prevdiff_m_2024_plot <- ggplot() +
+  geom_line(data = df_prevdiff_m_max , aes(x=years, y=prev_m_2024_max_median), col="red") +
+  geom_ribbon(data=df_prevdiff_m_max , aes(x=years, ymin=prev_m_2024_max_low, ymax=prev_m_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prevdiff_m_min , aes(x=years, y=prev_m_2024_min_median), col="orange") +
+  geom_ribbon(data=df_prevdiff_m_min , aes(x=years, ymin=prev_m_2024_min_low, ymax=prev_m_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Change in % prevalence") +
+    ggtitle("Change % prevalence men 20-24y") +
+  coord_cartesian(ylim=c(-1,1)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prevdiff_f_1519_plot <- ggplot() +
+  geom_line(data = df_prevdiff_f_max , aes(x=years, y=prev_f_1519_max_median), col="red") +
+  geom_ribbon(data=df_prevdiff_f_max , aes(x=years, ymin=prev_f_1519_max_low, ymax=prev_f_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prevdiff_f_min , aes(x=years, y=prev_f_1519_min_median), col="orange") +
+  geom_ribbon(data=df_prevdiff_f_min , aes(x=years, ymin=prev_f_1519_min_low, ymax=prev_f_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Change in % prevalence") +
+  ggtitle("Change % prevalence women 15-19y") +
+  coord_cartesian(ylim=c(-1,1)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+prevdiff_f_2024_plot <- ggplot() +
+  geom_line(data = df_prevdiff_f_max , aes(x=years, y=prev_f_2024_max_median), col="red") +
+  geom_ribbon(data=df_prevdiff_f_max , aes(x=years, ymin=prev_f_2024_max_low, ymax=prev_f_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_prevdiff_f_min , aes(x=years, y=prev_f_2024_min_median), col="orange") +
+  geom_ribbon(data=df_prevdiff_f_min , aes(x=years, ymin=prev_f_2024_min_low, ymax=prev_f_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Change in % prevalence") +
+    ggtitle("Change % prevalence women 20-24y") +
+  coord_cartesian(ylim=c(-1,1)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+multiplot(plotlist=list(prevdiff_m_1519_plot, prevdiff_f_1519_plot, prevdiff_m_2024_plot, prevdiff_f_2024_plot), layout=matrix(1:4, nrow=2, byrow=TRUE))
+
+```
+
+Fig. 2
+
+The box plots show estimated annual changes in chlamydia prevalence. Within each pair, the light-, and dark-coloured boxes correspond to the minimum and maximum estimated numbers of tests and diagnoses shown in Figure 1, respectively; for the later years the minimum and maximum estimates were identical so the boxes show the same results. A horizontal line indicates the median estimate; boxes show the 50% credible interval, and vertical lines the 95% credible interval. Data are shown by age and sex: in men (panels A and B) and women (C and D), and in 15-19-year-olds (A and C) and 20-24-year-olds (B and D). Dashed lines represent the start and end of the NCSP roll-out across England.
+
+# Average duration of infection
+
+Now plot the average duration of infections, calculated using the relationship: duration = prevalence/incidence.
+
+Fig. 3
+
+```{r fig.width=7, fig.height=8,echo=FALSE}
+durinf_m_max <- prev_m_max/inc_m_max
+durinf_m_max_sorted <- aperm (apply (durinf_m_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+df_durinf_m_max <- data.frame(years=2000:2015, 
+                 durinf_m_1519_max_median = durinf_m_max_sorted[,1,round(n_sample*.5)],
+                 durinf_m_2024_max_median = durinf_m_max_sorted[,2,round(n_sample*.5)],
+                 
+                 durinf_m_1519_max_low = durinf_m_max_sorted[,1,round(n_sample*.025)],
+                 durinf_m_2024_max_low = durinf_m_max_sorted[,2,round(n_sample*.025)],
+                 
+                 durinf_m_1519_max_upp = durinf_m_max_sorted[,1,round(n_sample*.975)],
+                 durinf_m_2024_max_upp = durinf_m_max_sorted[,2,round(n_sample*.975)])
+
+durinf_f_max <- prev_f_max/inc_f_max
+durinf_f_max_sorted <- aperm (apply (durinf_f_max, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+df_durinf_f_max <- data.frame(years=2000:2015, 
+                 durinf_f_1519_max_median = durinf_f_max_sorted[,1,round(n_sample*.5)],
+                 durinf_f_2024_max_median = durinf_f_max_sorted[,2,round(n_sample*.5)],
+                 
+                 durinf_f_1519_max_low = durinf_f_max_sorted[,1,round(n_sample*.025)],
+                 durinf_f_2024_max_low = durinf_f_max_sorted[,2,round(n_sample*.025)],
+                 
+                 durinf_f_1519_max_upp = durinf_f_max_sorted[,1,round(n_sample*.975)],
+                 durinf_f_2024_max_upp = durinf_f_max_sorted[,2,round(n_sample*.975)])
+
+durinf_m_min <- prev_m_min/inc_m_min
+durinf_m_min_sorted <- aperm (apply (durinf_m_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+df_durinf_m_min <- data.frame(years=2000:2015, 
+                 durinf_m_1519_min_median = durinf_m_min_sorted[,1,round(n_sample*.5)],
+                 durinf_m_2024_min_median = durinf_m_min_sorted[,2,round(n_sample*.5)],
+                 
+                 durinf_m_1519_min_low = durinf_m_min_sorted[,1,round(n_sample*.025)],
+                 durinf_m_2024_min_low = durinf_m_min_sorted[,2,round(n_sample*.025)],
+                 
+                 durinf_m_1519_min_upp = durinf_m_min_sorted[,1,round(n_sample*.975)],
+                 durinf_m_2024_min_upp = durinf_m_min_sorted[,2,round(n_sample*.975)])
+
+durinf_f_min <- prev_f_min/inc_f_min
+durinf_f_min_sorted <- aperm (apply (durinf_f_min, 1:2, sort) , c(2, 3, 1)) # sort third dimension
+
+df_durinf_f_min <- data.frame(years=2000:2015, 
+                 durinf_f_1519_min_median = durinf_f_min_sorted[,1,round(n_sample*.5)],
+                 durinf_f_2024_min_median = durinf_f_min_sorted[,2,round(n_sample*.5)],
+                 
+                 durinf_f_1519_min_low = durinf_f_min_sorted[,1,round(n_sample*.025)],
+                 durinf_f_2024_min_low = durinf_f_min_sorted[,2,round(n_sample*.025)],
+                 
+                 durinf_f_1519_min_upp = durinf_f_min_sorted[,1,round(n_sample*.975)],
+                 durinf_f_2024_min_upp = durinf_f_min_sorted[,2,round(n_sample*.975)])
+
+durinf_m_1519_plot <- ggplot() +
+  geom_line(data = df_durinf_m_max , aes(x=years, y=durinf_m_1519_max_median), col="red") +
+  geom_ribbon(data=df_durinf_m_max , aes(x=years, ymin=durinf_m_1519_max_low, ymax=durinf_m_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_durinf_m_min , aes(x=years, y=durinf_m_1519_min_median), col="orange") +
+  geom_ribbon(data=df_durinf_m_min , aes(x=years, ymin=durinf_m_1519_min_low, ymax=durinf_m_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "mean duration of infection") +
+  ggtitle("mean duration of infection men 15-19y") +
+  coord_cartesian(ylim=c(0,2)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+durinf_m_2024_plot <- ggplot() +
+  geom_line(data = df_durinf_m_max , aes(x=years, y=durinf_m_2024_max_median), col="red") +
+  geom_ribbon(data=df_durinf_m_max , aes(x=years, ymin=durinf_m_2024_max_low, ymax=durinf_m_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_durinf_m_min , aes(x=years, y=durinf_m_2024_min_median), col="orange") +
+  geom_ribbon(data=df_durinf_m_min , aes(x=years, ymin=durinf_m_2024_min_low, ymax=durinf_m_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "mean duration of infection") +
+  ggtitle("mean duration of infection men 20-24y") +
+  coord_cartesian(ylim=c(0,2)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+durinf_f_1519_plot <- ggplot() +
+  geom_line(data = df_durinf_f_max , aes(x=years, y=durinf_f_1519_max_median), col="red") +
+  geom_ribbon(data=df_durinf_f_max , aes(x=years, ymin=durinf_f_1519_max_low, ymax=durinf_f_1519_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_durinf_f_min , aes(x=years, y=durinf_f_1519_min_median), col="orange") +
+  geom_ribbon(data=df_durinf_f_min , aes(x=years, ymin=durinf_f_1519_min_low, ymax=durinf_f_1519_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "mean duration of infection") +
+  ggtitle("mean duration of infection women 15-19y") +
+  coord_cartesian(ylim=c(0,2)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+durinf_f_2024_plot <- ggplot() +
+  geom_line(data = df_durinf_f_max , aes(x=years, y=durinf_f_2024_max_median), col="red") +
+  geom_ribbon(data=df_durinf_f_max , aes(x=years, ymin=durinf_f_2024_max_low, ymax=durinf_f_2024_max_upp), fill="red", alpha = .3) +
+  geom_line(data = df_durinf_f_min , aes(x=years, y=durinf_f_2024_min_median), col="orange") +
+  geom_ribbon(data=df_durinf_f_min , aes(x=years, ymin=durinf_f_2024_min_low, ymax=durinf_f_2024_min_upp), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "mean duration of infection") +
+  ggtitle("mean duration of infection women 20-24y") +
+  coord_cartesian(ylim=c(0,2)) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+multiplot(plotlist=list(durinf_m_1519_plot, durinf_f_1519_plot, durinf_m_2024_plot, durinf_f_2024_plot), layout=matrix(1:4, nrow=2, byrow=TRUE))
+
+```
+
+Coloured lines show the median estimated average duration of infection. Coloured ranges represent the 95% credible interval. The two lines and shaded regions represent estimates from the minimum and maximum numbers of tests and diagnoses. Data are shown by age and sex: in men (panels A and B) and women (C and D), and in 15-19-year- olds (A and C) and 20-24-year-olds (B and D). Dashed lines represent the start and end of the NCSP roll-out across England.
+
+# Pelvic inflammatory disease and duration of infection in women
+Finally, we use data from the Organisation for Economic Co-operation and Development (http://stats.oecd.org/Index.aspx?DataSetCode=HEALTH_PROC; accessed 1 August 2017) to examine the relationship between estimated prevalence in 15-24-year-old women and hospital discharge rates for inflammatory disease in female pelvic organs.
+
+```{r include=FALSE, cache=FALSE}
+# first, estimate prevalence in 15-24-year-old women
+
+population_f_15_24 = population_f[,2] + population_f[,3]
+pop_active_f_15_24 = pop_active_f[,1,] + pop_active_f[,2,]
+
+tests_f_15_24_max = tests_f_max[,2] + tests_f_max[,3]
+diagnoses_f_15_24_max = diagnoses_f_max[,2] + diagnoses_f_max[,3]
+
+# testing and diagnosis rates, per person per year
+
+test_rate_f_15_24_max = array(NA, dim=c(16,n_sample))
+test_rate_f_15_24_min = array(NA, dim=c(16,n_sample))
+
+diag_rate_f_15_24_max = array(NA, dim=c(16,n_sample))
+diag_rate_f_15_24_min = array(NA, dim=c(16,n_sample))
+
+for (i in 1:16){
+  test_rate_f_15_24_max[i,] <- rgamma(n_sample, tests_f_15_24_max[i]*population_f_15_24[i]/100, 1)/pop_active_f_15_24[i,]
+  diag_rate_f_15_24_max[i,] <- rgamma(n_sample, diagnoses_f_15_24_max[i]*population_f_15_24[i]/100000, 1)/pop_active_f_15_24[i,]
+}
+
+prev_f_15_24_max = array(NA, dim=c(16,n_sample))
+inc_f_15_24_max = array(NA, dim=c(16,n_sample))
+scr_f_15_24_max = array(NA, dim=c(16,n_sample))
+
+for (i in 1:16){
+  for (k in 1:n_sample){
+      
+    # get incidence and screening rate given data on testing and diagnoses
+    ss_f <- multiroot(function(parms) test_diag_fun(parms,1-p_asymp_f[k], sc_f[k], att_symp[k], p_true_pos_f[k], p_false_pos_f[k])-c(test_rate_f_15_24_max[i,k], diag_rate_f_15_24_max[i,k]),start = c(0.03, 0.44))$root
+    inc_f_15_24_max[i,k] <- ss_f[1]
+    scr_f_15_24_max[i,k] <- ss_f[2]
+  
+    # calculate prevalence given the computed incidence and screening rates
+    prev_f_15_24_max[i,k] <- sol_dyn$prev_fun(inc_f_15_24_max[i,k]*p_asymp_f[k],
+                                    sc_f[k] + scr_f_15_24_max[i,k]*p_true_pos_f[k],
+                                    inc_f_15_24_max[i,k]*(1-p_asymp_f[k]),
+                                    scr_f_15_24_max[i,k]*p_true_pos_f[k] + att_symp[k]*p_true_pos_f[k])
+  }
+}
+```
+
+```{r include=FALSE, cache=FALSE}
+# PID figures for 2000-2015 (diagnoses per 100000 woman-years)
+# available at http://stats.oecd.org/Index.aspx?DataSetCode=HEALTH_PROC# 
+# Checked 1 August 2017
+
+pid_oecd = c(63.6, 59.4, 57.5, 58, 56.9, 52.4, 50.4, 49, 48.8, 49.1, 48.5, 46.9, 47.5, 46.8, 45.3, 43.9)
+
+# Definite/probable PID diagnoses in general practice
+# from French et al. Sex Transm Dis 38:3 (2011)
+pid_gp = c(455, 408, 381, 373, 341, 289, 246, 211, 189,rep(NA, 7))
+pid_gp_poss = c(1149, 1138, 1092, 1172, 1206, 1114, 1092, 1024, 1026)
+```
+
+```{r fig.width=4, fig.height=4,echo=FALSE}
+# Plot
+mean_durinf_15_24_max <- rowMeans(prev_f_15_24_max/inc_f_15_24_max)
+plot(2000:2015, mean_durinf_15_24_max, xlab="Year", ylab="Average duration of infection women 15-24", ylim=c(0,.8), type="l")
+
+par(new = T)
+plot(2000:2015,pid_gp, pch=16, axes=F, xlab=NA, ylab=NA, ylim=c(0,500), type="l", lty=3)
+lines(2000:2015, pid_oecd, lty=2)
+axis(side = 4)
+mtext(side = 4,  'PID diagnoses per 100000 woman years')
+
+```
+
+
+Panel A shows estimated average duration of infections (solid lines) in 15-24-year-old women in England, and UK hospital discharge rates for inflammatory disease of the female pelvic organs (dashed line), 2000-2015, Panel B shows the correlation between hospital discharges and average duration of infection in 15-24-year-old women. Triangles pointing to the right indicate minimum estimates of duration; triangles pointing left indicate maximum duration. Horizontal lines join markers corresponding to the same year and age group. All estimates for duration of infection are represented by the median sample.
+
+# Steady state assumption?
+
+Chlamydia in England, 2000-2015: dynamic analysis
+Our analysis of chlamydia prevalence estimates between 2000 and 2015 assumes a system is in a steady state. This workbook investigates this assumption in more detail. The red line is the prevalence figure calculated using stead states. The blue line is the prevalence figure making no such assumptions.
+
+
+```{r include=FALSE, cache=FALSE}
+# set up a function to simulate system dynamics when perturbed from steady state
+dydt <- function(t, y, parms) {
+  # parms = c(alpha_UA, alpha_AU, alpha_US, alpha_SU)
+  dU <- parms[2]*y[2] + parms[4]*y[3] - (parms[1] + parms[3])*y[1]
+  dA <- parms[1]*y[1] - parms[2]*y[2]
+  dS <- parms[3]*y[1] - parms[4]*y[3]
+  der <- c(dU,dA,dS)
+  list(der)
+}
+```
+
+```{r fig.width=3, fig.height=4,echo=FALSE}
+# cols <- c("black","red","blue","green")
+# 
+# prev_dynsol_f_max <- array(NA, dim=c(16,2))
+# 
+# # set up a function to simulate system dynamics when perturbed from steady state
+# for (j in 1:2){
+#   
+#   ind <- which.min(abs(median(prev_f_max[1,j,]) - prev_f_max[1,j,])) # index where prev_f_max has its median value, for year 2000
+#   
+#   U_2000 = sol_dyn$U_fun(
+#     inc_f_max[1,j,ind]*p_asymp_f[ind], 
+#     sc_f[ind] + scr_f_max[1,j,ind]*p_true_pos_f[ind], # att_symp[ind] + scr_f_max[1,j,ind]*p_true_pos_f[ind], ????????????????
+#     inc_f_max[1,j,ind]*(1-p_asymp_f[ind]),
+#     scr_f_max[1,j,ind]*p_true_pos_f[ind] + att_symp[ind]*p_true_pos_f[ind])
+#   A_2000 =sol_dyn$A_fun(
+#     inc_f_max[1,j,ind]*p_asymp_f[ind], 
+#     sc_f[ind] +  scr_f_max[1,j,ind]*p_true_pos_f[ind], # att_symp[ind] + scr_f_max[0,j,ind]*p_true_pos_f[ind],  ????????????????
+#     inc_f_max[1,j,ind]*(1-p_asymp_f[ind]), 
+#     scr_f_max[1,j,ind]*p_true_pos_f[ind] + att_symp[ind]*p_true_pos_f[ind])
+#   S_2000 = sol_dyn$S_fun(
+#     inc_f_max[1,j,ind]*p_asymp_f[ind], 
+#     sc_f[ind] +  scr_f_max[1,j,ind]*p_true_pos_f[ind], # att_symp[ind] + scr_f_max[0,j,ind]*p_true_pos_f[ind],  ????????????????
+#     inc_f_max[1,j,ind]*(1-p_asymp_f[ind]), 
+#     scr_f_max[1,j,ind]*p_true_pos_f[ind] + att_symp[ind]*p_true_pos_f[ind])
+#   
+#   sol = array(NA, dim=c(1000,4))
+#   sol[1000,2] = U_2000
+#   sol[1000,3] = A_2000
+#   sol[1000,4] = S_2000  
+#   
+#   
+#   for (i in 1:16){
+#     
+#     # parameters
+#     parms = c(inc_f_max[i,j,ind]*p_asymp_f[ind], 
+#               sc_f[ind] + scr_f_max[i,j,ind]*p_true_pos_f[ind], # att_symp[ind] + scr_f_max[i,j,ind]*p_true_pos_f[ind],   ????????????????
+#               inc_f_max[i,j,ind]*(1-p_asymp_f[ind]), 
+#               scr_f_max[i,j,ind]*p_true_pos_f[ind] + att_symp[ind]*p_true_pos_f[ind])
+#     
+#     # solve
+#     sol = as.data.frame(ode(y=as.numeric(sol[1000,2:4]), times=seq(0,1,length.out =1000), dydt, parms=parms)) # times=seq(0,10??????,length.out =1000) ????????????????????
+#     
+#     prev_dynsol_f_max[i,j] <- sol[1000,3] + sol[1000,4]
+#     
+#     # plot
+#     # lines(2000 + i + seq(0,1,length.out=1000), sol[,3] + sol[,4], col=cols[j])
+#   }
+# }
+# 
+# df_prev_dynsol_f_max <- data.frame(years=2000:2015, 
+#                                    prev_f_1519_max_median = prev_dynsol_f_max[,1],
+#                                    prev_f_2024_max_median = prev_dynsol_f_max[,2])
+# 
+# prev_f_1519_plot <- prev_f_1519_plot  +
+# geom_line(data = df_prev_dynsol_f_max , aes(x=years, y=prev_f_1519_max_median), col="blue", lty=2) 
+# 
+# prev_f_2024_plot <- prev_f_2024_plot  +
+#   geom_line(data = df_prev_dynsol_f_max , aes(x=years, y=prev_f_2024_max_median), col="blue", lty=2) 
+# 
+# multiplot(plotlist=list(prev_f_1519_plot, prev_f_2024_plot), layout=matrix(c(1,2), nrow=2, byrow=TRUE))
+```
+
+
+By comparing the computed prevalence using the equations in steady state only (red graph) to the ones that considere within one year dynamics occurring (blue graphs) it is clear that the steady state assumptions doesn't seem to affect the results much.
+This means: the dynamic changes in the transition rates (which are computed for each year separately) determine the model trajectories most (and hence the computed prevalence for each year).
+
+# Per year changes in the transition rates
+
+Below we plotted the per year changes in the transition rates (computed by using the data on number of tests and diagnoses for each year separately).
+Particularly the incidence seems to go down. This is probably becuase the prevalence goes down in time.
+
+```{r include=FALSE, cache=FALSE}
+alpha_UA_f_max <- array(NA, dim=c(16,2,n_sample))
+alpha_AU_f_max <- array(NA, dim=c(16,2,n_sample))
+alpha_US_f_max <- array(NA, dim=c(16,2,n_sample))
+alpha_SU_f_max <- array(NA, dim=c(16,2,n_sample))
+
+alpha_UA_m_max <- array(NA, dim=c(16,2,n_sample))
+alpha_AU_m_max <- array(NA, dim=c(16,2,n_sample))
+alpha_US_m_max <- array(NA, dim=c(16,2,n_sample))
+alpha_SU_m_max <- array(NA, dim=c(16,2,n_sample))
+
+alpha_UA_f_min <- array(NA, dim=c(16,2,n_sample))
+alpha_AU_f_min <- array(NA, dim=c(16,2,n_sample))
+alpha_US_f_min <- array(NA, dim=c(16,2,n_sample))
+alpha_SU_f_min <- array(NA, dim=c(16,2,n_sample))
+
+alpha_UA_m_min <- array(NA, dim=c(16,2,n_sample))
+alpha_AU_m_min <- array(NA, dim=c(16,2,n_sample))
+alpha_US_m_min <- array(NA, dim=c(16,2,n_sample))
+alpha_SU_m_min <- array(NA, dim=c(16,2,n_sample))
+
+# set up a function to simulate system dynamics when perturbed from steady state
+for (j in 1:2){
+  for (i in 1:16){
+    
+    # parameters
+    alpha_UA_m_max[i,j,] <- inc_m_max[i,j,]*p_asymp_m
+    alpha_AU_m_max[i,j,] <- sc_m + scr_m_max[i,j,]*p_true_pos_m
+    alpha_US_m_max[i,j,] <- inc_m_max[i,j,]*(1-p_asymp_m)
+    alpha_SU_m_max[i,j,] <- scr_m_max[i,j,]*p_true_pos_m + att_symp[1:n_sample]*p_true_pos_m
+    
+    alpha_UA_m_min[i,j,] <- inc_m_min[i,j,]*p_asymp_m
+    alpha_AU_m_min[i,j,] <- sc_m + scr_m_min[i,j,]*p_true_pos_m
+    alpha_US_m_min[i,j,] <- inc_m_min[i,j,]*(1-p_asymp_m)
+    alpha_SU_m_min[i,j,] <- scr_m_min[i,j,]*p_true_pos_m + att_symp[1:n_sample]*p_true_pos_m
+    
+    alpha_UA_f_max[i,j,] <- inc_f_max[i,j,]*p_asymp_f
+    alpha_AU_f_max[i,j,] <- sc_f + scr_f_max[i,j,]*p_true_pos_f
+    alpha_US_f_max[i,j,] <- inc_f_max[i,j,]*(1-p_asymp_f)
+    alpha_SU_f_max[i,j,] <- scr_f_max[i,j,]*p_true_pos_f + att_symp[1:n_sample]*p_true_pos_f
+    
+    alpha_UA_f_min[i,j,] <- inc_f_min[i,j,]*p_asymp_f
+    alpha_AU_f_min[i,j,] <- sc_f + scr_f_min[i,j,]*p_true_pos_f
+    alpha_US_f_min[i,j,] <- inc_f_min[i,j,]*(1-p_asymp_f)
+    alpha_SU_f_min[i,j,] <- scr_f_min[i,j,]*p_true_pos_f + att_symp[1:n_sample]*p_true_pos_f
+    
+  }
+}
+
+alpha_UA_f_max_sorted <- aperm (apply (alpha_UA_f_max, 1:2, sort) , c(2, 3, 1))
+alpha_AU_f_max_sorted <- aperm (apply (alpha_AU_f_max, 1:2, sort) , c(2, 3, 1))
+alpha_US_f_max_sorted <- aperm (apply (alpha_US_f_max, 1:2, sort) , c(2, 3, 1))
+alpha_SU_f_max_sorted <- aperm (apply (alpha_SU_f_max, 1:2, sort) , c(2, 3, 1))
+inc_f_max_sorted <- aperm (apply (inc_f_max, 1:2, sort) , c(2, 3, 1))
+scr_f_max_sorted <- aperm (apply (scr_f_max, 1:2, sort) , c(2, 3, 1))
+
+alpha_UA_m_max_sorted <- aperm (apply (alpha_UA_m_max, 1:2, sort) , c(2, 3, 1))
+alpha_AU_m_max_sorted <- aperm (apply (alpha_AU_m_max, 1:2, sort) , c(2, 3, 1))
+alpha_US_m_max_sorted <- aperm (apply (alpha_US_m_max, 1:2, sort) , c(2, 3, 1))
+alpha_SU_m_max_sorted <- aperm (apply (alpha_SU_m_max, 1:2, sort) , c(2, 3, 1))
+inc_m_max_sorted <- aperm (apply (inc_m_max, 1:2, sort) , c(2, 3, 1))
+scr_m_max_sorted <- aperm (apply (scr_m_max, 1:2, sort) , c(2, 3, 1))
+
+alpha_UA_f_min_sorted <- aperm (apply (alpha_UA_f_min, 1:2, sort) , c(2, 3, 1))
+alpha_AU_f_min_sorted <- aperm (apply (alpha_AU_f_min, 1:2, sort) , c(2, 3, 1))
+alpha_US_f_min_sorted <- aperm (apply (alpha_US_f_min, 1:2, sort) , c(2, 3, 1))
+alpha_SU_f_min_sorted <- aperm (apply (alpha_SU_f_min, 1:2, sort) , c(2, 3, 1))
+inc_f_min_sorted <- aperm (apply (inc_f_min, 1:2, sort) , c(2, 3, 1))
+scr_f_min_sorted <- aperm (apply (scr_f_min, 1:2, sort) , c(2, 3, 1))
+
+alpha_UA_m_min_sorted <- aperm (apply (alpha_UA_m_min, 1:2, sort) , c(2, 3, 1))
+alpha_AU_m_min_sorted <- aperm (apply (alpha_AU_m_min, 1:2, sort) , c(2, 3, 1))
+alpha_US_m_min_sorted <- aperm (apply (alpha_US_m_min, 1:2, sort) , c(2, 3, 1))
+alpha_SU_m_min_sorted <- aperm (apply (alpha_SU_m_min, 1:2, sort) , c(2, 3, 1))
+inc_m_min_sorted <- aperm (apply (inc_m_min, 1:2, sort) , c(2, 3, 1))
+scr_m_min_sorted <- aperm (apply (scr_m_min, 1:2, sort) , c(2, 3, 1))
+
+# men
+df_alpha_UA_m <- data.frame(years=2000:2015,
+                          alpha_UA_m_max_median_1519 = alpha_UA_m_max_sorted[,1,round(n_sample*.5)],
+                          alpha_UA_m_max_median_2024 = alpha_UA_m_max_sorted[,2,round(n_sample*.5)],
+                          alpha_UA_m_max_low_1519 = alpha_UA_m_max_sorted[,1,round(n_sample*.025)],
+                          alpha_UA_m_max_low_2024 = alpha_UA_m_max_sorted[,2,round(n_sample*.025)],
+                          alpha_UA_m_max_upp_1519 = alpha_UA_m_max_sorted[,1,round(n_sample*.975)],
+                          alpha_UA_m_max_upp_2024 = alpha_UA_m_max_sorted[,2,round(n_sample*.975)],
+                          alpha_UA_m_min_median_1519 = alpha_UA_m_min_sorted[,1,round(n_sample*.5)],
+                          alpha_UA_m_min_median_2024 = alpha_UA_m_min_sorted[,2,round(n_sample*.5)],
+                          alpha_UA_m_min_low_1519 = alpha_UA_m_min_sorted[,1,round(n_sample*.025)],
+                          alpha_UA_m_min_low_2024 = alpha_UA_m_min_sorted[,2,round(n_sample*.025)],
+                          alpha_UA_m_min_upp_1519 = alpha_UA_m_min_sorted[,1,round(n_sample*.975)],
+                          alpha_UA_m_min_upp_2024 = alpha_UA_m_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_AU_m <- data.frame(years=2000:2015,
+                          alpha_AU_m_max_median_1519 = alpha_AU_m_max_sorted[,1,round(n_sample*.5)],
+                          alpha_AU_m_max_median_2024 = alpha_AU_m_max_sorted[,2,round(n_sample*.5)],
+                          alpha_AU_m_max_low_1519 = alpha_AU_m_max_sorted[,1,round(n_sample*.025)],
+                          alpha_AU_m_max_low_2024 = alpha_AU_m_max_sorted[,2,round(n_sample*.025)],
+                          alpha_AU_m_max_upp_1519 = alpha_AU_m_max_sorted[,1,round(n_sample*.975)],
+                          alpha_AU_m_max_upp_2024 = alpha_AU_m_max_sorted[,2,round(n_sample*.975)],
+                          alpha_AU_m_min_median_1519 = alpha_AU_m_min_sorted[,1,round(n_sample*.5)],
+                          alpha_AU_m_min_median_2024 = alpha_AU_m_min_sorted[,2,round(n_sample*.5)],
+                          alpha_AU_m_min_low_1519 = alpha_AU_m_min_sorted[,1,round(n_sample*.025)],
+                          alpha_AU_m_min_low_2024 = alpha_AU_m_min_sorted[,2,round(n_sample*.025)],
+                          alpha_AU_m_min_upp_1519 = alpha_AU_m_min_sorted[,1,round(n_sample*.975)],
+                          alpha_AU_m_min_upp_2024 = alpha_AU_m_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_US_m <- data.frame(years=2000:2015,
+                          alpha_US_m_max_median_1519 = alpha_US_m_max_sorted[,1,round(n_sample*.5)],
+                          alpha_US_m_max_median_2024 = alpha_US_m_max_sorted[,2,round(n_sample*.5)],
+                          alpha_US_m_max_low_1519 = alpha_US_m_max_sorted[,1,round(n_sample*.025)],
+                          alpha_US_m_max_low_2024 = alpha_US_m_max_sorted[,2,round(n_sample*.025)],
+                          alpha_US_m_max_upp_1519 = alpha_US_m_max_sorted[,1,round(n_sample*.975)],
+                          alpha_US_m_max_upp_2024 = alpha_US_m_max_sorted[,2,round(n_sample*.975)],
+                          alpha_US_m_min_median_1519 = alpha_US_m_min_sorted[,1,round(n_sample*.5)],
+                          alpha_US_m_min_median_2024 = alpha_US_m_min_sorted[,2,round(n_sample*.5)],
+                          alpha_US_m_min_low_1519 = alpha_US_m_min_sorted[,1,round(n_sample*.025)],
+                          alpha_US_m_min_low_2024 = alpha_US_m_min_sorted[,2,round(n_sample*.025)],
+                          alpha_US_m_min_upp_1519 = alpha_US_m_min_sorted[,1,round(n_sample*.975)],
+                          alpha_US_m_min_upp_2024 = alpha_US_m_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_SU_m <- data.frame(years=2000:2015,
+                          alpha_SU_m_max_median_1519 = alpha_SU_m_max_sorted[,1,round(n_sample*.5)],
+                          alpha_SU_m_max_median_2024 = alpha_SU_m_max_sorted[,2,round(n_sample*.5)],
+                          alpha_SU_m_max_low_1519 = alpha_SU_m_max_sorted[,1,round(n_sample*.025)],
+                          alpha_SU_m_max_low_2024 = alpha_SU_m_max_sorted[,2,round(n_sample*.025)],
+                          alpha_SU_m_max_upp_1519 = alpha_SU_m_max_sorted[,1,round(n_sample*.975)],
+                          alpha_SU_m_max_upp_2024 = alpha_SU_m_max_sorted[,2,round(n_sample*.975)],
+                          alpha_SU_m_min_median_1519 = alpha_SU_m_min_sorted[,1,round(n_sample*.5)],
+                          alpha_SU_m_min_median_2024 = alpha_SU_m_min_sorted[,2,round(n_sample*.5)],
+                          alpha_SU_m_min_low_1519 = alpha_SU_m_min_sorted[,1,round(n_sample*.025)],
+                          alpha_SU_m_min_low_2024 = alpha_SU_m_min_sorted[,2,round(n_sample*.025)],
+                          alpha_SU_m_min_upp_1519 = alpha_SU_m_min_sorted[,1,round(n_sample*.975)],
+                          alpha_SU_m_min_upp_2024 = alpha_SU_m_min_sorted[,2,round(n_sample*.975)])
+
+df_inc_m <- data.frame(years=2000:2015,
+                          inc_m_max_median_1519 = inc_m_max_sorted[,1,round(n_sample*.5)],
+                          inc_m_max_median_2024 = inc_m_max_sorted[,2,round(n_sample*.5)],
+                          inc_m_max_low_1519 = inc_m_max_sorted[,1,round(n_sample*.025)],
+                          inc_m_max_low_2024 = inc_m_max_sorted[,2,round(n_sample*.025)],
+                          inc_m_max_upp_1519 = inc_m_max_sorted[,1,round(n_sample*.975)],
+                          inc_m_max_upp_2024 = inc_m_max_sorted[,2,round(n_sample*.975)],
+                          inc_m_min_median_1519 = inc_m_min_sorted[,1,round(n_sample*.5)],
+                          inc_m_min_median_2024 = inc_m_min_sorted[,2,round(n_sample*.5)],
+                          inc_m_min_low_1519 = inc_m_min_sorted[,1,round(n_sample*.025)],
+                          inc_m_min_low_2024 = inc_m_min_sorted[,2,round(n_sample*.025)],
+                          inc_m_min_upp_1519 = inc_m_min_sorted[,1,round(n_sample*.975)],
+                          inc_m_min_upp_2024 = inc_m_min_sorted[,2,round(n_sample*.975)])
+
+df_scr_m <- data.frame(years=2000:2015,
+                          scr_m_max_median_1519 = scr_m_max_sorted[,1,round(n_sample*.5)],
+                          scr_m_max_median_2024 = scr_m_max_sorted[,2,round(n_sample*.5)],
+                          scr_m_max_low_1519 = scr_m_max_sorted[,1,round(n_sample*.025)],
+                          scr_m_max_low_2024 = scr_m_max_sorted[,2,round(n_sample*.025)],
+                          scr_m_max_upp_1519 = scr_m_max_sorted[,1,round(n_sample*.975)],
+                          scr_m_max_upp_2024 = scr_m_max_sorted[,2,round(n_sample*.975)],
+                          scr_m_min_median_1519 = scr_m_min_sorted[,1,round(n_sample*.5)],
+                          scr_m_min_median_2024 = scr_m_min_sorted[,2,round(n_sample*.5)],
+                          scr_m_min_low_1519 = scr_m_min_sorted[,1,round(n_sample*.025)],
+                          scr_m_min_low_2024 = scr_m_min_sorted[,2,round(n_sample*.025)],
+                          scr_m_min_upp_1519 = scr_m_min_sorted[,1,round(n_sample*.975)],
+                          scr_m_min_upp_2024 = scr_m_min_sorted[,2,round(n_sample*.975)])
+
+# women
+df_alpha_UA_f <- data.frame(years=2000:2015,
+                          alpha_UA_f_max_median_1519 = alpha_UA_f_max_sorted[,1,round(n_sample*.5)],
+                          alpha_UA_f_max_median_2024 = alpha_UA_f_max_sorted[,2,round(n_sample*.5)],
+                          alpha_UA_f_max_low_1519 = alpha_UA_f_max_sorted[,1,round(n_sample*.025)],
+                          alpha_UA_f_max_low_2024 = alpha_UA_f_max_sorted[,2,round(n_sample*.025)],
+                          alpha_UA_f_max_upp_1519 = alpha_UA_f_max_sorted[,1,round(n_sample*.975)],
+                          alpha_UA_f_max_upp_2024 = alpha_UA_f_max_sorted[,2,round(n_sample*.975)],
+                          alpha_UA_f_min_median_1519 = alpha_UA_f_min_sorted[,1,round(n_sample*.5)],
+                          alpha_UA_f_min_median_2024 = alpha_UA_f_min_sorted[,2,round(n_sample*.5)],
+                          alpha_UA_f_min_low_1519 = alpha_UA_f_min_sorted[,1,round(n_sample*.025)],
+                          alpha_UA_f_min_low_2024 = alpha_UA_f_min_sorted[,2,round(n_sample*.025)],
+                          alpha_UA_f_min_upp_1519 = alpha_UA_f_min_sorted[,1,round(n_sample*.975)],
+                          alpha_UA_f_min_upp_2024 = alpha_UA_f_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_AU_f <- data.frame(years=2000:2015,
+                          alpha_AU_f_max_median_1519 = alpha_AU_f_max_sorted[,1,round(n_sample*.5)],
+                          alpha_AU_f_max_median_2024 = alpha_AU_f_max_sorted[,2,round(n_sample*.5)],
+                          alpha_AU_f_max_low_1519 = alpha_AU_f_max_sorted[,1,round(n_sample*.025)],
+                          alpha_AU_f_max_low_2024 = alpha_AU_f_max_sorted[,2,round(n_sample*.025)],
+                          alpha_AU_f_max_upp_1519 = alpha_AU_f_max_sorted[,1,round(n_sample*.975)],
+                          alpha_AU_f_max_upp_2024 = alpha_AU_f_max_sorted[,2,round(n_sample*.975)],
+                          alpha_AU_f_min_median_1519 = alpha_AU_f_min_sorted[,1,round(n_sample*.5)],
+                          alpha_AU_f_min_median_2024 = alpha_AU_f_min_sorted[,2,round(n_sample*.5)],
+                          alpha_AU_f_min_low_1519 = alpha_AU_f_min_sorted[,1,round(n_sample*.025)],
+                          alpha_AU_f_min_low_2024 = alpha_AU_f_min_sorted[,2,round(n_sample*.025)],
+                          alpha_AU_f_min_upp_1519 = alpha_AU_f_min_sorted[,1,round(n_sample*.975)],
+                          alpha_AU_f_min_upp_2024 = alpha_AU_f_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_US_f <- data.frame(years=2000:2015,
+                          alpha_US_f_max_median_1519 = alpha_US_f_max_sorted[,1,round(n_sample*.5)],
+                          alpha_US_f_max_median_2024 = alpha_US_f_max_sorted[,2,round(n_sample*.5)],
+                          alpha_US_f_max_low_1519 = alpha_US_f_max_sorted[,1,round(n_sample*.025)],
+                          alpha_US_f_max_low_2024 = alpha_US_f_max_sorted[,2,round(n_sample*.025)],
+                          alpha_US_f_max_upp_1519 = alpha_US_f_max_sorted[,1,round(n_sample*.975)],
+                          alpha_US_f_max_upp_2024 = alpha_US_f_max_sorted[,2,round(n_sample*.975)],
+                          alpha_US_f_min_median_1519 = alpha_US_f_min_sorted[,1,round(n_sample*.5)],
+                          alpha_US_f_min_median_2024 = alpha_US_f_min_sorted[,2,round(n_sample*.5)],
+                          alpha_US_f_min_low_1519 = alpha_US_f_min_sorted[,1,round(n_sample*.025)],
+                          alpha_US_f_min_low_2024 = alpha_US_f_min_sorted[,2,round(n_sample*.025)],
+                          alpha_US_f_min_upp_1519 = alpha_US_f_min_sorted[,1,round(n_sample*.975)],
+                          alpha_US_f_min_upp_2024 = alpha_US_f_min_sorted[,2,round(n_sample*.975)])
+
+df_alpha_SU_f <- data.frame(years=2000:2015,
+                          alpha_SU_f_max_median_1519 = alpha_SU_f_max_sorted[,1,round(n_sample*.5)],
+                          alpha_SU_f_max_median_2024 = alpha_SU_f_max_sorted[,2,round(n_sample*.5)],
+                          alpha_SU_f_max_low_1519 = alpha_SU_f_max_sorted[,1,round(n_sample*.025)],
+                          alpha_SU_f_max_low_2024 = alpha_SU_f_max_sorted[,2,round(n_sample*.025)],
+                          alpha_SU_f_max_upp_1519 = alpha_SU_f_max_sorted[,1,round(n_sample*.975)],
+                          alpha_SU_f_max_upp_2024 = alpha_SU_f_max_sorted[,2,round(n_sample*.975)],
+                          alpha_SU_f_min_median_1519 = alpha_SU_f_min_sorted[,1,round(n_sample*.5)],
+                          alpha_SU_f_min_median_2024 = alpha_SU_f_min_sorted[,2,round(n_sample*.5)],
+                          alpha_SU_f_min_low_1519 = alpha_SU_f_min_sorted[,1,round(n_sample*.025)],
+                          alpha_SU_f_min_low_2024 = alpha_SU_f_min_sorted[,2,round(n_sample*.025)],
+                          alpha_SU_f_min_upp_1519 = alpha_SU_f_min_sorted[,1,round(n_sample*.975)],
+                          alpha_SU_f_min_upp_2024 = alpha_SU_f_min_sorted[,2,round(n_sample*.975)])
+
+df_inc_f<- data.frame(years=2000:2015,
+                          inc_f_max_median_1519 = inc_f_max_sorted[,1,round(n_sample*.5)],
+                          inc_f_max_median_2024 = inc_f_max_sorted[,2,round(n_sample*.5)],
+                          inc_f_max_low_1519 = inc_f_max_sorted[,1,round(n_sample*.025)],
+                          inc_f_max_low_2024 = inc_f_max_sorted[,2,round(n_sample*.025)],
+                          inc_f_max_upp_1519 = inc_f_max_sorted[,1,round(n_sample*.975)],
+                          inc_f_max_upp_2024 = inc_f_max_sorted[,2,round(n_sample*.975)],
+                          inc_f_min_median_1519 = inc_f_min_sorted[,1,round(n_sample*.5)],
+                          inc_f_min_median_2024 = inc_f_min_sorted[,2,round(n_sample*.5)],
+                          inc_f_min_low_1519 = inc_f_min_sorted[,1,round(n_sample*.025)],
+                          inc_f_min_low_2024 = inc_f_min_sorted[,2,round(n_sample*.025)],
+                          inc_f_min_upp_1519 = inc_f_min_sorted[,1,round(n_sample*.975)],
+                          inc_f_min_upp_2024 = inc_f_min_sorted[,2,round(n_sample*.975)])
+
+df_scr_f <- data.frame(years=2000:2015,
+                          scr_f_max_median_1519 = scr_f_max_sorted[,1,round(n_sample*.5)],
+                          scr_f_max_median_2024 = scr_f_max_sorted[,2,round(n_sample*.5)],
+                          scr_f_max_low_1519 = scr_f_max_sorted[,1,round(n_sample*.025)],
+                          scr_f_max_low_2024 = scr_f_max_sorted[,2,round(n_sample*.025)],
+                          scr_f_max_upp_1519 = scr_f_max_sorted[,1,round(n_sample*.975)],
+                          scr_f_max_upp_2024 = scr_f_max_sorted[,2,round(n_sample*.975)],
+                          scr_f_min_median_1519 = scr_f_min_sorted[,1,round(n_sample*.5)],
+                          scr_f_min_median_2024 = scr_f_min_sorted[,2,round(n_sample*.5)],
+                          scr_f_min_low_1519 = scr_f_min_sorted[,1,round(n_sample*.025)],
+                          scr_f_min_low_2024 = scr_f_min_sorted[,2,round(n_sample*.025)],
+                          scr_f_min_upp_1519 = scr_f_min_sorted[,1,round(n_sample*.975)],
+                          scr_f_min_upp_2024 = scr_f_min_sorted[,2,round(n_sample*.975)])
+
+# parameter plot women 15-19
+alpha_UA_m_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_UA_m , aes(x=years, y=alpha_UA_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_UA_m , aes(x=years, ymin=alpha_UA_m_max_low_1519, ymax=alpha_UA_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_UA_m , aes(x=years, y=alpha_UA_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_UA_m , aes(x=years, ymin=alpha_UA_m_min_low_1519, ymax=alpha_UA_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_UA_m") +
+  ggtitle("asymptomatic incidence rate men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_UA_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_AU_m_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_AU_m , aes(x=years, y=alpha_AU_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_AU_m , aes(x=years, ymin=alpha_AU_m_max_low_1519, ymax=alpha_AU_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_AU_m , aes(x=years, y=alpha_AU_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_AU_m , aes(x=years, ymin=alpha_AU_m_min_low_1519, ymax=alpha_AU_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_AU_m") +
+  ggtitle("clearance + screening rate men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_AU_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_US_m_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_US_m , aes(x=years, y=alpha_US_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_US_m , aes(x=years, ymin=alpha_US_m_max_low_1519, ymax=alpha_US_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_US_m , aes(x=years, y=alpha_US_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_US_m , aes(x=years, ymin=alpha_US_m_min_low_1519, ymax=alpha_US_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_US_m") +
+  ggtitle("symptomatic incidence rate men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_US_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_SU_m_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_SU_m , aes(x=years, y=alpha_SU_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_SU_m , aes(x=years, ymin=alpha_SU_m_max_low_1519, ymax=alpha_SU_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_SU_m , aes(x=years, y=alpha_SU_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_SU_m , aes(x=years, ymin=alpha_SU_m_min_low_1519, ymax=alpha_SU_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_SU_m") +
+  ggtitle("symptomatic treatment rate men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_SU_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+inc_m_1519_plot <- ggplot() +
+  geom_line(data = df_inc_m , aes(x=years, y=inc_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_inc_m , aes(x=years, ymin=inc_m_max_low_1519, ymax=inc_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_inc_m , aes(x=years, y=inc_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_inc_m , aes(x=years, ymin=inc_m_min_low_1519, ymax=inc_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Incidence rate") +
+  ggtitle("men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_inc_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+scr_m_1519_plot <- ggplot() +
+  geom_line(data = df_scr_m , aes(x=years, y=scr_m_max_median_1519), col="red") +
+  geom_ribbon(data=df_scr_m , aes(x=years, ymin=scr_m_max_low_1519, ymax=scr_m_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_scr_m , aes(x=years, y=scr_m_min_median_1519), col="orange") +
+  geom_ribbon(data=df_scr_m , aes(x=years, ymin=scr_m_min_low_1519, ymax=scr_m_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "scr_m") +
+  ggtitle("screening rate men 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_scr_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+
+alpha_UA_m_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_UA_m , aes(x=years, y=alpha_UA_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_UA_m , aes(x=years, ymin=alpha_UA_m_max_low_2024, ymax=alpha_UA_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_UA_m , aes(x=years, y=alpha_UA_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_UA_m , aes(x=years, ymin=alpha_UA_m_min_low_2024, ymax=alpha_UA_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_UA_m") +
+  ggtitle("asymptomatic incidence rate men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_UA_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_AU_m_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_AU_m , aes(x=years, y=alpha_AU_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_AU_m , aes(x=years, ymin=alpha_AU_m_max_low_2024, ymax=alpha_AU_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_AU_m , aes(x=years, y=alpha_AU_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_AU_m , aes(x=years, ymin=alpha_AU_m_min_low_2024, ymax=alpha_AU_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_AU_m") +
+  ggtitle("clearance + screening rate men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_AU_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_US_m_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_US_m , aes(x=years, y=alpha_US_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_US_m , aes(x=years, ymin=alpha_US_m_max_low_2024, ymax=alpha_US_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_US_m , aes(x=years, y=alpha_US_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_US_m , aes(x=years, ymin=alpha_US_m_min_low_2024, ymax=alpha_US_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_US_m") +
+  ggtitle("symptomatic incidence rate men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_US_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_SU_m_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_SU_m , aes(x=years, y=alpha_SU_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_SU_m , aes(x=years, ymin=alpha_SU_m_max_low_2024, ymax=alpha_SU_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_SU_m , aes(x=years, y=alpha_SU_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_SU_m , aes(x=years, ymin=alpha_SU_m_min_low_2024, ymax=alpha_SU_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_SU_m") +
+  ggtitle("symptomatic treatment rate men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_SU_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+inc_m_2024_plot <- ggplot() +
+  geom_line(data = df_inc_m , aes(x=years, y=inc_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_inc_m , aes(x=years, ymin=inc_m_max_low_2024, ymax=inc_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_inc_m , aes(x=years, y=inc_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_inc_m , aes(x=years, ymin=inc_m_min_low_2024, ymax=inc_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Incidence rate") +
+  ggtitle("men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_inc_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+scr_m_2024_plot <- ggplot() +
+  geom_line(data = df_scr_m , aes(x=years, y=scr_m_max_median_2024), col="red") +
+  geom_ribbon(data=df_scr_m , aes(x=years, ymin=scr_m_max_low_2024, ymax=scr_m_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_scr_m , aes(x=years, y=scr_m_min_median_2024), col="orange") +
+  geom_ribbon(data=df_scr_m , aes(x=years, ymin=scr_m_min_low_2024, ymax=scr_m_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "scr_m") +
+  ggtitle("screening rate men 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_scr_m[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+
+# parameter plot women 15-19
+alpha_UA_f_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_UA_f , aes(x=years, y=alpha_UA_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_UA_f , aes(x=years, ymin=alpha_UA_f_max_low_1519, ymax=alpha_UA_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_UA_f , aes(x=years, y=alpha_UA_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_UA_f , aes(x=years, ymin=alpha_UA_f_min_low_1519, ymax=alpha_UA_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_UA_f") +
+  ggtitle("asymptomatic incidence rate women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_UA_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_AU_f_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_AU_f , aes(x=years, y=alpha_AU_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_AU_f , aes(x=years, ymin=alpha_AU_f_max_low_1519, ymax=alpha_AU_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_AU_f , aes(x=years, y=alpha_AU_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_AU_f , aes(x=years, ymin=alpha_AU_f_min_low_1519, ymax=alpha_AU_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_AU_f") +
+  ggtitle("clearance + screening rate women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_AU_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_US_f_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_US_f , aes(x=years, y=alpha_US_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_US_f , aes(x=years, ymin=alpha_US_f_max_low_1519, ymax=alpha_US_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_US_f , aes(x=years, y=alpha_US_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_US_f , aes(x=years, ymin=alpha_US_f_min_low_1519, ymax=alpha_US_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_US_f") +
+  ggtitle("symptomatic incidence rate women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_US_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_SU_f_1519_plot <- ggplot() +
+  geom_line(data = df_alpha_SU_f , aes(x=years, y=alpha_SU_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_alpha_SU_f , aes(x=years, ymin=alpha_SU_f_max_low_1519, ymax=alpha_SU_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_SU_f , aes(x=years, y=alpha_SU_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_alpha_SU_f , aes(x=years, ymin=alpha_SU_f_min_low_1519, ymax=alpha_SU_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_SU_f") +
+  ggtitle("symptomatic treatment rate women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_SU_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+inc_f_1519_plot <- ggplot() +
+  geom_line(data = df_inc_f , aes(x=years, y=inc_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_inc_f , aes(x=years, ymin=inc_f_max_low_1519, ymax=inc_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_inc_f , aes(x=years, y=inc_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_inc_f , aes(x=years, ymin=inc_f_min_low_1519, ymax=inc_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Incidence rate") +
+  ggtitle("women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_inc_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+scr_f_1519_plot <- ggplot() +
+  geom_line(data = df_scr_f , aes(x=years, y=scr_f_max_median_1519), col="red") +
+  geom_ribbon(data=df_scr_f , aes(x=years, ymin=scr_f_max_low_1519, ymax=scr_f_max_upp_1519), fill="red", alpha = .3) +
+  geom_line(data = df_scr_f , aes(x=years, y=scr_f_min_median_1519), col="orange") +
+  geom_ribbon(data=df_scr_f , aes(x=years, ymin=scr_f_min_low_1519, ymax=scr_f_min_upp_1519), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "scr_f") +
+  ggtitle("screening rate women 15-19y") +
+  coord_cartesian(ylim=c(0,max(df_scr_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+
+# parameter plot women 20-24
+alpha_UA_f_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_UA_f , aes(x=years, y=alpha_UA_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_UA_f , aes(x=years, ymin=alpha_UA_f_max_low_2024, ymax=alpha_UA_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_UA_f , aes(x=years, y=alpha_UA_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_UA_f , aes(x=years, ymin=alpha_UA_f_min_low_2024, ymax=alpha_UA_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_UA_f") +
+  ggtitle("asymptomatic incidence rate women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_UA_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_AU_f_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_AU_f , aes(x=years, y=alpha_AU_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_AU_f , aes(x=years, ymin=alpha_AU_f_max_low_2024, ymax=alpha_AU_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_AU_f , aes(x=years, y=alpha_AU_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_AU_f , aes(x=years, ymin=alpha_AU_f_min_low_2024, ymax=alpha_AU_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_AU_f") +
+  ggtitle("clearance + screening rate women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_AU_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_US_f_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_US_f , aes(x=years, y=alpha_US_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_US_f , aes(x=years, ymin=alpha_US_f_max_low_2024, ymax=alpha_US_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_US_f , aes(x=years, y=alpha_US_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_US_f , aes(x=years, ymin=alpha_US_f_min_low_2024, ymax=alpha_US_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_US_f") +
+  ggtitle("symptomatic incidence rate women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_US_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+alpha_SU_f_2024_plot <- ggplot() +
+  geom_line(data = df_alpha_SU_f , aes(x=years, y=alpha_SU_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_alpha_SU_f , aes(x=years, ymin=alpha_SU_f_max_low_2024, ymax=alpha_SU_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_alpha_SU_f , aes(x=years, y=alpha_SU_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_alpha_SU_f , aes(x=years, ymin=alpha_SU_f_min_low_2024, ymax=alpha_SU_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "alpha_SU_f") +
+  ggtitle("symptomatic treatment rate women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_alpha_SU_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+inc_f_2024_plot <- ggplot() +
+  geom_line(data = df_inc_f , aes(x=years, y=inc_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_inc_f , aes(x=years, ymin=inc_f_max_low_2024, ymax=inc_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_inc_f , aes(x=years, y=inc_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_inc_f , aes(x=years, ymin=inc_f_min_low_2024, ymax=inc_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "Incidence rate") +
+  ggtitle("women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_inc_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+scr_f_2024_plot <- ggplot() +
+  geom_line(data = df_scr_f , aes(x=years, y=scr_f_max_median_2024), col="red") +
+  geom_ribbon(data=df_scr_f , aes(x=years, ymin=scr_f_max_low_2024, ymax=scr_f_max_upp_2024), fill="red", alpha = .3) +
+  geom_line(data = df_scr_f , aes(x=years, y=scr_f_min_median_2024), col="orange") +
+  geom_ribbon(data=df_scr_f , aes(x=years, ymin=scr_f_min_low_2024, ymax=scr_f_min_upp_2024), fill="orange", alpha = .3) +
+  labs(x = "Years") +
+  labs(y = "scr_f") +
+  ggtitle("screening rate women 20-24y") +
+  coord_cartesian(ylim=c(0,max(df_scr_f[,-1]))) +
+  theme_bw(base_family = "Times") + 
+  theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.key = element_blank())
+
+```
+
+```{r fig.width=7, fig.height=10,echo=FALSE}
+multiplot(plotlist=list(alpha_UA_m_1519_plot, alpha_AU_m_1519_plot,
+                        alpha_US_m_1519_plot, alpha_SU_m_1519_plot,
+                        inc_m_1519_plot, scr_m_1519_plot), layout=matrix(1:6, nrow=3, byrow=TRUE))
+```
+
+```{r fig.width=7, fig.height=10,echo=FALSE}
+multiplot(plotlist=list(alpha_UA_m_2024_plot, alpha_AU_m_2024_plot,
+                        alpha_US_m_2024_plot, alpha_SU_m_2024_plot,
+                        inc_m_2024_plot, scr_m_2024_plot), layout=matrix(1:6, nrow=3, byrow=TRUE))
+```
+
+```{r fig.width=7, fig.height=10,echo=FALSE}
+multiplot(plotlist=list(alpha_UA_f_1519_plot, alpha_AU_f_1519_plot,
+                        alpha_US_f_1519_plot, alpha_SU_f_1519_plot,
+                        inc_f_1519_plot, scr_f_1519_plot), layout=matrix(1:6, nrow=3, byrow=TRUE))
+```
+
+```{r fig.width=7, fig.height=10,echo=FALSE}
+multiplot(plotlist=list(alpha_UA_f_2024_plot, alpha_AU_f_2024_plot,
+                        alpha_US_f_2024_plot, alpha_SU_f_2024_plot,
+                        inc_f_2024_plot, scr_f_2024_plot), layout=matrix(1:6, nrow=3, byrow=TRUE))
+
+
+
+```
+
+```{r echo=FALSE}
+
+# pdf("Incidence.pdf",width=9,height=9)
+# multiplot(plotlist=list(inc_f_1519_plot,inc_f_2024_plot,
+#                         inc_m_1519_plot, inc_m_2024_plot), layout=matrix(1:4, nrow=2, byrow=TRUE))
+# dev.off()
+```
